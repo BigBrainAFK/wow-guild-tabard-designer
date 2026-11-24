@@ -15,8 +15,11 @@ import { FAKE_DISPLAY_BASE, FAKE_TEXTURE_BASE, FRONT_VIEW_VERSION } from "../sha
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PROD = process.argv.includes("--prod") || process.env.NODE_ENV === "production";
 const PORT = Number(process.env.PORT ?? 5173);
-/** Listen on localhost by default; put a reverse proxy (TLS, compression) in front for public access. */
-const HOST = process.env.HOST ?? "127.0.0.1";
+/**
+ * Addresses to listen on, comma-separated. Default: localhost over both IPv4 and IPv6, so a reverse proxy can reach
+ * the server however "localhost" resolves. Put a reverse proxy (TLS, compression) in front for public access.
+ */
+const HOSTS = (process.env.HOST ?? "127.0.0.1,::1").split(",").map((h) => h.trim()).filter(Boolean);
 /** Behind a reverse proxy: take the client address from X-Forwarded-For (for rate limits). */
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
 /** "off": serve model data only from the local mirror, never contact Wowhead's CDN. */
@@ -24,8 +27,9 @@ const MODEL_FETCH = process.env.MODEL_FETCH !== "off";
 
 // Vite's dev server exposes source files and dev endpoints: never on a network interface unless explicitly allowed.
 const LOOPBACK = ["127.0.0.1", "::1", "localhost"];
-if (!PROD && !LOOPBACK.includes(HOST) && process.env.DEV_ALLOW_REMOTE !== "1") {
-  console.error(`Refusing to start dev mode on ${HOST}: dev mode exposes source files. Use "npm start" (production),`);
+const remoteHost = HOSTS.find((h) => !LOOPBACK.includes(h));
+if (!PROD && remoteHost && process.env.DEV_ALLOW_REMOTE !== "1") {
+  console.error(`Refusing to start dev mode on ${remoteHost}: dev mode exposes source files. Use "npm start" (production),`);
   console.error("or set DEV_ALLOW_REMOTE=1 if you really want dev mode reachable from the network.");
   process.exit(1);
 }
@@ -175,7 +179,7 @@ function serveStatic(pathname: string, res: http.ServerResponse) {
 
 const HEADERS = securityHeaders(PROD);
 
-const server = http.createServer(async (req, res) => {
+const handler: http.RequestListener = async (req, res) => {
   for (const [k, v] of Object.entries(HEADERS)) res.setHeader(k, v);
   // The app only reads: anything but GET/HEAD is refused (except for Vite's dev server).
   if (req.method !== "GET" && req.method !== "HEAD" && !vite) return send(res, 405, "method not allowed");
@@ -192,16 +196,41 @@ const server = http.createServer(async (req, res) => {
     // Details stay in the server log; clients only learn that something failed.
     if (!res.headersSent) send(res, 500, PROD ? "internal error" : (e as Error).message);
   }
-});
-server.requestTimeout = 60000;
-server.headersTimeout = 20000;
+};
 
-server.listen(PORT, HOST, () => {
-  console.log(`Tabard designer running at http://${HOST}:${PORT} (${PROD ? "production" : "dev"})`);
-  if (!MODEL_FETCH) console.log("Model data: local mirror only (MODEL_FETCH=off)");
-  tabards.status().then((s) => {
-    if (s.source === "install") console.log(`Tabard textures: WoW install at ${WOW_PATH} (${s.product} ${s.version})`);
-    else if (s.source === "pack") console.log(`Tabard textures: texture pack in ${TEXTURE_DIR}`);
-    else console.warn(`No tabard textures: set WOW_PATH, or build the pack with "npm run extract" and copy it to ${TEXTURE_DIR}`);
+/** Errors that only mean this machine has no such address (e.g. IPv6 disabled): skip it if another one works. */
+const UNAVAILABLE = new Set(["EADDRNOTAVAIL", "EAFNOSUPPORT"]);
+const address = (host: string) => `http://${host.includes(":") ? `[${host}]` : host}:${PORT}`;
+
+function listen(host: string): Promise<boolean> {
+  const server = http.createServer(handler);
+  server.requestTimeout = 60000;
+  server.headersTimeout = 20000;
+  return new Promise((done, fail) => {
+    server.once("error", (e: NodeJS.ErrnoException) => {
+      if (HOSTS.length > 1 && UNAVAILABLE.has(e.code ?? "")) {
+        console.warn(`Not listening on ${host}: ${e.code} (address not available on this machine)`);
+        done(false);
+      } else fail(new Error(`cannot listen on ${address(host)}: ${e.message}`));
+    });
+    server.listen(PORT, host, () => {
+      console.log(`Tabard designer running at ${address(host)} (${PROD ? "production" : "dev"})`);
+      done(true);
+    });
   });
+}
+
+try {
+  const bound = await Promise.all(HOSTS.map(listen));
+  if (!bound.some(Boolean)) throw new Error(`none of ${HOSTS.join(", ")} is available`);
+} catch (e) {
+  console.error(`[server] ${(e as Error).message}`);
+  process.exit(1);
+}
+
+if (!MODEL_FETCH) console.log("Model data: local mirror only (MODEL_FETCH=off)");
+tabards.status().then((s) => {
+  if (s.source === "install") console.log(`Tabard textures: WoW install at ${WOW_PATH} (${s.product} ${s.version})`);
+  else if (s.source === "pack") console.log(`Tabard textures: texture pack in ${TEXTURE_DIR}`);
+  else console.warn(`No tabard textures: set WOW_PATH, or build the pack with "npm run extract" and copy it to ${TEXTURE_DIR}`);
 });

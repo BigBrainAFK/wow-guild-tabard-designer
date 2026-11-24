@@ -52,7 +52,7 @@ Configuration lives in `.env` (see `.env.example`):
 | `TEXTURE_DIR` | `data/textures` | Texture pack                                                             |
 | `MODEL_DIR`   | `data/zam`      | Local mirror of Wowhead's model data                                     |
 | `PORT`        | `5173`          | HTTP port                                                                |
-| `HOST`        | `127.0.0.1`     | Interface to listen on (dev mode refuses non-local addresses)            |
+| `HOST`        | `127.0.0.1,::1` | Addresses to listen on, comma-separated (dev mode refuses non-local ones) |
 | `TRUST_PROXY` | (off)           | `1` behind a reverse proxy: rate-limit by `X-Forwarded-For`              |
 | `MODEL_FETCH` | (on)            | `off`: serve model data only from `data/zam`, never contact Wowhead      |
 | `CACHE_DIR`   | `.cache`        | Blizzard CDN downloads while extracting (safe to delete afterwards)      |
@@ -62,7 +62,7 @@ Configuration lives in `.env` (see `.env.example`):
 1. On a machine with WoW: `npm run extract` and `npm run fetch-models`, then copy `data/` to the server.
 2. On the server: `npm ci`, `npm run build`, then `npm start` (never `npm run dev`: dev mode serves source files,
    and refuses to listen on anything but localhost unless `DEV_ALLOW_REMOTE=1`).
-3. Keep `HOST=127.0.0.1` and put a reverse proxy in front (Caddy, nginx) for TLS; set `TRUST_PROXY=1` there.
+3. Keep the default `HOST` (localhost over IPv4 and IPv6) and put a reverse proxy in front (Caddy, nginx) for TLS; set `TRUST_PROXY=1` there.
    HTTPS is required in public: the 3D tabard comes from a service worker, which browsers only allow on HTTPS
    (or on localhost).
 4. Optional: `MODEL_FETCH=off` so the server never downloads from Wowhead (non-default customization textures
